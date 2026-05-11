@@ -2,92 +2,88 @@ import streamlit as st
 import numpy as np
 import joblib
 from PIL import Image
+import tensorflow as tf
 import os
 
-# ---------------- PAGE ----------------
-st.set_page_config(
-    page_title="DR Detection System",
-    layout="centered"
-)
+st.set_page_config(page_title="DR Detection", layout="centered")
 
-st.title("🩺 Diabetic Retinopathy Detection System")
-st.write("Fast & stable AI prediction system")
+st.title("🩺 Diabetic Retinopathy Detection")
 
-# ---------------- LOAD ONLY STAGE 1 (FAST) ----------------
+# ---------------- LOAD MODELS ----------------
 @st.cache_resource
-def load_stage1():
-    model = joblib.load("stage1_model.pkl")
+def load_models():
+    stage1 = joblib.load("stage1_model.pkl")
     scaler = joblib.load("stage1_scaler.pkl")
-    return model, scaler
+    class_names = joblib.load("class_names.pkl")
 
-stage1_model, scaler = load_stage1()
+    stage2 = None
 
-# ---------------- LOAD CLASS NAMES ----------------
-class_names = joblib.load("class_names.pkl")
+    # try both formats
+    if os.path.exists("stage2_model.keras"):
+        stage2 = tf.keras.models.load_model("stage2_model.keras", compile=False)
+
+    elif os.path.exists("stage2_model.h5"):
+        stage2 = tf.keras.models.load_model("stage2_model.h5", compile=False)
+
+    return stage1, scaler, stage2, class_names
+
+
+stage1_model, scaler, stage2_model, class_names = load_models()
 
 # ---------------- INPUT ----------------
-st.header("📋 Patient Data")
+preg = st.number_input("Pregnancies", 0.0, 20.0, 1.0)
+glu = st.number_input("Glucose", 0.0, 300.0, 120.0)
+bp = st.number_input("BP", 0.0, 200.0, 70.0)
+skin = st.number_input("Skin", 0.0, 100.0, 20.0)
+insulin = st.number_input("Insulin", 0.0, 1000.0, 80.0)
+bmi = st.number_input("BMI", 0.0, 70.0, 25.0)
+dpf = st.number_input("DPF", 0.0, 3.0, 0.5)
+age = st.number_input("Age", 1.0, 120.0, 30.0)
 
-col1, col2 = st.columns(2)
+img_file = st.file_uploader("Upload Retina Image", type=["jpg", "png", "jpeg"])
 
-with col1:
-    pregnancies = st.number_input("Pregnancies", 0.0, 20.0, 1.0)
-    glucose = st.number_input("Glucose", 0.0, 300.0, 120.0)
-    bp = st.number_input("Blood Pressure", 0.0, 200.0, 70.0)
-    skin = st.number_input("Skin Thickness", 0.0, 100.0, 20.0)
+image = None
+if img_file:
+    image = Image.open(img_file).convert("RGB")
+    st.image(image, use_container_width=True)
 
-with col2:
-    insulin = st.number_input("Insulin", 0.0, 1000.0, 80.0)
-    bmi = st.number_input("BMI", 0.0, 70.0, 25.0)
-    dpf = st.number_input("Diabetes Pedigree Function", 0.0, 3.0, 0.5)
-    age = st.number_input("Age", 1.0, 120.0, 30.0)
+# ---------------- PREDICT ----------------
+if st.button("Analyze"):
 
-# ---------------- IMAGE ----------------
-uploaded_file = st.file_uploader("Upload Retina Image (optional)", type=["jpg", "jpeg", "png"])
+    X = np.array([[preg, glu, bp, skin, insulin, bmi, dpf, age]])
+    X = scaler.transform(X)
 
-if uploaded_file:
-    image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, caption="Uploaded Image", use_container_width=True)
+    risk = stage1_model.predict_proba(X)[0][1] * 100
 
-# ---------------- ANALYZE ----------------
-if st.button("🔍 Analyze Patient"):
+    st.subheader("Stage 1 Result")
+    st.success(f"Risk: {risk:.2f}%")
 
-    # ================= STAGE 1 =================
-    data = np.array([[pregnancies, glucose, bp, skin, insulin, bmi, dpf, age]])
-    scaled = scaler.transform(data)
-
-    risk = stage1_model.predict_proba(scaled)[0][1] * 100
-
-    st.subheader("🧠 Stage 1 Result")
-    st.success(f"Diabetes Risk: {risk:.2f}%")
-
-    # ================= STAGE 2 (SIMPLIFIED SAFE VERSION) =================
     if risk > 30:
-        st.warning("⚠ High Risk Detected")
 
-        if uploaded_file is None:
-            st.error("Upload retina image for further analysis")
+        st.warning("High Risk → Running Stage 2")
+
+        if stage2_model is None:
+            st.error("Stage 2 model NOT loaded. Check file upload.")
+
+        elif image is None:
+            st.error("Upload retina image")
+
         else:
-            st.info("Stage 2 analysis disabled for stability (model compatibility issue)")
+            # preprocess
+            img = image.resize((224, 224))
+            img = np.array(img)
+            img = np.expand_dims(img, axis=0)
+            img = tf.keras.applications.densenet.preprocess_input(img)
 
-            # Instead of crashing → we simulate safe structured output
-            st.subheader("🧠 Stage 2 Result (Safe Mode)")
+            pred = stage2_model.predict(img)
 
-            # Simple heuristic simulation (NOT TF dependent)
-            if risk > 70:
-                predicted = "Severe DR"
-                confidence = 88
-            elif risk > 50:
-                predicted = "Moderate DR"
-                confidence = 75
-            else:
-                predicted = "Mild DR"
-                confidence = 60
+            idx = np.argmax(pred)
+            label = class_names[idx]
+            conf = np.max(pred) * 100
 
-            st.success(f"Prediction: {predicted}")
-            st.info(f"Confidence: {confidence}%")
-
-            st.write("ℹ Note: Stage 2 ML model disabled due to deployment limitations")
+            st.subheader("Stage 2 Result")
+            st.success(f"Prediction: {label}")
+            st.info(f"Confidence: {conf:.2f}%")
 
     else:
-        st.success("Low Risk — No Retinal Damage Detected")
+        st.success("Low Risk")
