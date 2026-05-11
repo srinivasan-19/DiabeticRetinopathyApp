@@ -3,22 +3,22 @@ import numpy as np
 import joblib
 from PIL import Image
 
-# ---------------- PAGE CONFIG ----------------
-st.set_page_config(
-    page_title="Diabetic Retinopathy AI System",
-    page_icon="🧠",
-    layout="centered"
-)
-
-st.title("🧠 AI Diabetic Retinopathy Detection System")
-st.markdown("### Stage 1 (Risk Prediction) + Stage 2 (Retina Analysis)")
-
-# ---------------- SAFE IMPORT ----------------
+# ---------------- SAFE TF IMPORT ----------------
 try:
     import tensorflow as tf
     TF_AVAILABLE = True
-except:
+except Exception:
     TF_AVAILABLE = False
+
+
+# ---------------- PAGE CONFIG ----------------
+st.set_page_config(
+    page_title="Diabetic Retinopathy AI System",
+    layout="centered"
+)
+
+st.title("🩺 AI Diabetic Retinopathy Detection System")
+st.write("Enter patient details and upload retina image for prediction.")
 
 
 # ---------------- LOAD MODELS ----------------
@@ -29,30 +29,29 @@ def load_models():
     class_names = joblib.load("class_names.pkl")
 
     stage2_model = None
+    error_msg = None
+
     if TF_AVAILABLE:
         try:
-            stage2_model = tf.keras.models.load_model(
-                "stage2_model.keras",
-                compile=False
-            )
-        except:
-            stage2_model = None
+            stage2_model = tf.keras.models.load_model("stage2_model.keras")
+        except Exception as e:
+            error_msg = str(e)
 
-    return stage1_model, scaler, stage2_model, class_names
+    return stage1_model, scaler, stage2_model, class_names, error_msg
 
 
-stage1_model, scaler, stage2_model, class_names = load_models()
+stage1_model, scaler, stage2_model, class_names, stage2_error = load_models()
 
 
 # ---------------- INPUT SECTION ----------------
-st.subheader("📋 Patient Information")
+st.header("📋 Patient Data")
 
 col1, col2 = st.columns(2)
 
 with col1:
     pregnancies = st.number_input("Pregnancies", 0.0, 20.0, 1.0)
     glucose = st.number_input("Glucose", 0.0, 300.0, 120.0)
-    blood_pressure = st.number_input("Blood Pressure", 0.0, 200.0, 80.0)
+    blood_pressure = st.number_input("Blood Pressure", 0.0, 200.0, 70.0)
     skin_thickness = st.number_input("Skin Thickness", 0.0, 100.0, 20.0)
 
 with col2:
@@ -63,12 +62,9 @@ with col2:
 
 
 # ---------------- IMAGE UPLOAD ----------------
-st.subheader("📷 Retina Image Upload")
+st.header("📷 Retina Image Upload")
 
-uploaded_file = st.file_uploader(
-    "Upload retina image",
-    type=["jpg", "jpeg", "png"]
-)
+uploaded_file = st.file_uploader("Upload Image", type=["jpg", "jpeg", "png"])
 
 image = None
 
@@ -77,65 +73,62 @@ if uploaded_file:
     st.image(image, caption="Uploaded Image", use_container_width=True)
 
 
-# ---------------- ANALYZE BUTTON ----------------
+# ---------------- PREDICTION ----------------
 if st.button("🔍 Analyze Patient"):
 
-    # ---------------- STAGE 1 ----------------
-    input_data = np.array([[
+    # -------- Stage 1 --------
+    patient_data = np.array([[
         pregnancies, glucose, blood_pressure,
         skin_thickness, insulin, bmi, dpf, age
     ]])
 
-    scaled = scaler.transform(input_data)
-    risk = stage1_model.predict_proba(scaled)[0][1] * 100
+    patient_scaled = scaler.transform(patient_data)
+    risk = stage1_model.predict_proba(patient_scaled)[0][1] * 100
 
-    st.markdown("## 🩺 Stage 1 Result")
+    st.subheader("🧠 Stage 1 Result (Risk Prediction)")
     st.success(f"Diabetes Risk: {risk:.2f}%")
 
-    # ---------------- STAGE 2 ----------------
+    # -------- Stage 2 Decision --------
     if risk > 30:
-        st.warning("⚠ High Risk Detected → Proceeding to Stage 2")
+        st.warning("⚠ High Risk Detected - Running Retina Analysis")
 
         if not uploaded_file:
             st.error("Please upload retina image for Stage 2 analysis")
 
         elif not TF_AVAILABLE:
-            st.error("TensorFlow not available in this environment")
+            st.error("TensorFlow not installed in environment")
 
         elif stage2_model is None:
-            st.error("Stage 2 model could not be loaded")
+            st.error("Stage 2 model failed to load ❌")
+            if stage2_error:
+                st.code(stage2_error)
 
         else:
-            try:
-                img = image.resize((224, 224))
-                img_array = np.array(img)
-                img_array = np.expand_dims(img_array, axis=0)
+            # -------- IMAGE PROCESS --------
+            img = image.resize((224, 224))
+            img = np.array(img)
+            img = np.expand_dims(img, axis=0)
 
-                img_array = tf.keras.applications.densenet.preprocess_input(img_array)
+            img = tf.keras.applications.densenet.preprocess_input(img)
 
-                prediction = stage2_model.predict(img_array)
+            prediction = stage2_model.predict(img)
 
-                predicted_index = np.argmax(prediction)
-                predicted_class = class_names[predicted_index]
-                confidence = np.max(prediction) * 100
+            idx = np.argmax(prediction)
+            predicted_class = class_names[idx]
+            confidence = np.max(prediction) * 100
 
-                st.markdown("## 🧬 Stage 2 Result")
+            st.subheader("🧠 Stage 2 Result (Retina Analysis)")
+            st.success(f"Prediction: {predicted_class}")
+            st.info(f"Confidence: {confidence:.2f}%")
 
-                st.success(f"Prediction: {predicted_class}")
-                st.info(f"Confidence: {confidence:.2f}%")
+            st.subheader("📊 Class Probabilities")
+            for i, c in enumerate(class_names):
+                st.write(f"{c}: {prediction[0][i]*100:.2f}%")
 
-                st.markdown("### 📊 Class Probabilities")
-
-                for i, cls in enumerate(class_names):
-                    st.write(f"{cls}: {prediction[0][i]*100:.2f}%")
-
-                if predicted_class.lower() == "healthy":
-                    st.success("✔ No Diabetic Retinopathy detected")
-                else:
-                    st.error("⚠ Consult Ophthalmologist Immediately")
-
-            except Exception as e:
-                st.error(f"Stage 2 error: {str(e)}")
+            if predicted_class.lower() == "healthy":
+                st.success("No DR detected")
+            else:
+                st.error("Consult Ophthalmologist")
 
     else:
-        st.success("✔ Low Risk — No further analysis required")
+        st.success("Low Risk — No Retina Analysis Needed")
