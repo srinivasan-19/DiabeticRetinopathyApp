@@ -2,92 +2,140 @@ import streamlit as st
 import numpy as np
 import joblib
 from PIL import Image
-import os
 
-st.set_page_config(page_title="DR Detection", layout="centered")
+# ---------------- PAGE CONFIG ----------------
+st.set_page_config(
+    page_title="Diabetic Retinopathy AI System",
+    page_icon="🧠",
+    layout="centered"
+)
 
-st.title("🩺 Diabetic Retinopathy System")
+st.title("🧠 AI Diabetic Retinopathy Detection System")
+st.markdown("### Stage 1 (Risk Prediction) + Stage 2 (Retina Analysis)")
 
-# ---------------- LOAD SAFE MODELS ----------------
+# ---------------- SAFE IMPORT ----------------
+try:
+    import tensorflow as tf
+    TF_AVAILABLE = True
+except:
+    TF_AVAILABLE = False
+
+
+# ---------------- LOAD MODELS ----------------
 @st.cache_resource
 def load_models():
-
-    stage1 = joblib.load("stage1_model.pkl")
+    stage1_model = joblib.load("stage1_model.pkl")
     scaler = joblib.load("stage1_scaler.pkl")
     class_names = joblib.load("class_names.pkl")
 
-    stage2 = None
-
-    # ONLY load if valid file exists
-    if os.path.exists("stage2_model.h5"):
+    stage2_model = None
+    if TF_AVAILABLE:
         try:
-            import tensorflow as tf
-            stage2 = tf.keras.models.load_model("stage2_model.h5", compile=False)
-        except Exception as e:
-            st.error(f"Stage 2 load error: {e}")
+            stage2_model = tf.keras.models.load_model(
+                "stage2_model.keras",
+                compile=False
+            )
+        except:
+            stage2_model = None
 
-    return stage1, scaler, stage2, class_names
+    return stage1_model, scaler, stage2_model, class_names
 
 
 stage1_model, scaler, stage2_model, class_names = load_models()
 
-# ---------------- INPUT ----------------
-preg = st.number_input("Pregnancies", 0.0, 20.0, 1.0)
-glu = st.number_input("Glucose", 0.0, 300.0, 120.0)
-bp = st.number_input("Blood Pressure", 0.0, 200.0, 70.0)
-skin = st.number_input("Skin Thickness", 0.0, 100.0, 20.0)
-insulin = st.number_input("Insulin", 0.0, 1000.0, 80.0)
-bmi = st.number_input("BMI", 0.0, 70.0, 25.0)
-dpf = st.number_input("DPF", 0.0, 3.0, 0.5)
-age = st.number_input("Age", 1.0, 120.0, 30.0)
 
-file = st.file_uploader("Upload Retina Image", type=["jpg", "png", "jpeg"])
+# ---------------- INPUT SECTION ----------------
+st.subheader("📋 Patient Information")
 
-img = None
-if file:
-    img = Image.open(file).convert("RGB")
-    st.image(img, use_container_width=True)
+col1, col2 = st.columns(2)
 
-# ---------------- RUN ----------------
-if st.button("Analyze"):
+with col1:
+    pregnancies = st.number_input("Pregnancies", 0.0, 20.0, 1.0)
+    glucose = st.number_input("Glucose", 0.0, 300.0, 120.0)
+    blood_pressure = st.number_input("Blood Pressure", 0.0, 200.0, 80.0)
+    skin_thickness = st.number_input("Skin Thickness", 0.0, 100.0, 20.0)
 
-    X = np.array([[preg, glu, bp, skin, insulin, bmi, dpf, age]])
-    X = scaler.transform(X)
+with col2:
+    insulin = st.number_input("Insulin", 0.0, 1000.0, 80.0)
+    bmi = st.number_input("BMI", 0.0, 70.0, 25.0)
+    dpf = st.number_input("Diabetes Pedigree Function", 0.0, 3.0, 0.5)
+    age = st.number_input("Age", 1.0, 120.0, 30.0)
 
-    risk = stage1_model.predict_proba(X)[0][1] * 100
 
-    st.subheader("Stage 1 Result")
-    st.success(f"Risk: {risk:.2f}%")
+# ---------------- IMAGE UPLOAD ----------------
+st.subheader("📷 Retina Image Upload")
+
+uploaded_file = st.file_uploader(
+    "Upload retina image",
+    type=["jpg", "jpeg", "png"]
+)
+
+image = None
+
+if uploaded_file:
+    image = Image.open(uploaded_file).convert("RGB")
+    st.image(image, caption="Uploaded Image", use_container_width=True)
+
+
+# ---------------- ANALYZE BUTTON ----------------
+if st.button("🔍 Analyze Patient"):
+
+    # ---------------- STAGE 1 ----------------
+    input_data = np.array([[
+        pregnancies, glucose, blood_pressure,
+        skin_thickness, insulin, bmi, dpf, age
+    ]])
+
+    scaled = scaler.transform(input_data)
+    risk = stage1_model.predict_proba(scaled)[0][1] * 100
+
+    st.markdown("## 🩺 Stage 1 Result")
+    st.success(f"Diabetes Risk: {risk:.2f}%")
 
     # ---------------- STAGE 2 ----------------
     if risk > 30:
+        st.warning("⚠ High Risk Detected → Proceeding to Stage 2")
 
-        st.warning("High Risk Detected")
+        if not uploaded_file:
+            st.error("Please upload retina image for Stage 2 analysis")
 
-        if stage2_model is None:
-            st.error("Stage 2 model NOT loaded — fix .h5 file")
+        elif not TF_AVAILABLE:
+            st.error("TensorFlow not available in this environment")
 
-        elif img is None:
-            st.error("Upload retina image")
+        elif stage2_model is None:
+            st.error("Stage 2 model could not be loaded")
 
         else:
-            import tensorflow as tf
+            try:
+                img = image.resize((224, 224))
+                img_array = np.array(img)
+                img_array = np.expand_dims(img_array, axis=0)
 
-            img2 = img.resize((224, 224))
-            img2 = np.array(img2)
-            img2 = np.expand_dims(img2, axis=0)
+                img_array = tf.keras.applications.densenet.preprocess_input(img_array)
 
-            img2 = tf.keras.applications.densenet.preprocess_input(img2)
+                prediction = stage2_model.predict(img_array)
 
-            pred = stage2_model.predict(img2)
+                predicted_index = np.argmax(prediction)
+                predicted_class = class_names[predicted_index]
+                confidence = np.max(prediction) * 100
 
-            idx = np.argmax(pred)
-            label = class_names[idx]
-            conf = np.max(pred) * 100
+                st.markdown("## 🧬 Stage 2 Result")
 
-            st.subheader("Stage 2 Result")
-            st.success(f"Prediction: {label}")
-            st.info(f"Confidence: {conf:.2f}%")
+                st.success(f"Prediction: {predicted_class}")
+                st.info(f"Confidence: {confidence:.2f}%")
+
+                st.markdown("### 📊 Class Probabilities")
+
+                for i, cls in enumerate(class_names):
+                    st.write(f"{cls}: {prediction[0][i]*100:.2f}%")
+
+                if predicted_class.lower() == "healthy":
+                    st.success("✔ No Diabetic Retinopathy detected")
+                else:
+                    st.error("⚠ Consult Ophthalmologist Immediately")
+
+            except Exception as e:
+                st.error(f"Stage 2 error: {str(e)}")
 
     else:
-        st.success("Low Risk")
+        st.success("✔ Low Risk — No further analysis required")
