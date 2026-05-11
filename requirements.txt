@@ -1,10 +1,10 @@
 streamlit
-tf-nightly-cpu
-scikit-learn
-pandas
+tensorflow-cpu
 numpy
+pandas
 pillow
+opencv-python-headless
+scikit-learn
 joblib
+xgboost
 h5py
-protobuf
-keras
